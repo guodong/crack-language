@@ -1,0 +1,168 @@
+## Tools for working with protocol buffers.
+
+import crack.io Reader, StringReader, StringWriter, Writer;
+import crack.lang Exception;
+import crack.serial SerialReader, SerialWriter, END;
+
+@import crack.ann interface;
+
+## Thrown when we encounter a feature of the protocol that we haven't
+## implemented yet.
+class UnsupportedOperation : Exception {
+    oper init(String message) : Exception(message) {}
+}
+
+class Field;
+class Message;
+class ProtoReader;
+class ProtoWriter;
+void _deserialize(ProtoReader src, Message message);
+
+@interface Message {
+    @abstract void serialize(ProtoWriter dst);
+    @abstract void addField(Field field);
+
+    @final void deserialize(ProtoReader src) {
+        _deserialize(src, this);
+    }
+}
+
+String _serializeToString(Message message);
+Message _readMessage(String buffer, Message message);
+
+class Field {
+    uint id;
+    byte type;
+
+    uint __intData;
+    String __strData;
+
+    ## PRIVATE constructor.
+    oper init(uint id, byte type, String strData) :
+        id = id,
+        type = type,
+        __strData = strData {
+    }
+
+    ## PRIVATE constructor.
+    oper init(uint id, byte type, uint intData) :
+        id = id,
+        type = type,
+        __intData = intData {
+    }
+
+    bool isString() {
+        return type == 2;
+    }
+
+    ## Returns the string value of the field (null if it is not a string).
+    String getString() {
+        return __strData;
+    }
+
+    ## Returns the uint value of the field (0 if it is not a uint).
+    uint getUInt() {
+        return __intData;
+    }
+
+    bool isUInt() {
+        return type == 0;
+    }
+
+    @static Field readFrom(SerialReader src) {
+        header := src.readUInt(false);
+        if (header == END)
+            return null;
+
+        type := byte(header & 0x7);
+        id := header >> 3;
+        if (type == 0)
+            return Field(id, type, src.readUInt());
+        else if (type == 2)
+            return Field(id, type, src.readString());
+        else
+            throw Exception();
+    }
+
+    ## Reads the messsage 'inst' out of a string field's value.
+    void readMessage(Message inst) {
+        _readMessage(getString(), inst);
+    }
+
+    void write(SerialWriter dst) {
+        dst.write((id << 3) | type);
+        if (type == 0)
+            dst.write(__intData);
+        else if (type == 2)
+            dst.write(__strData);
+    }
+
+    @static void write(SerialWriter dst, uint id, String data) {
+        dst.write((id << 3) | 2);
+        dst.write(data);
+    }
+
+    @static void write(SerialWriter dst, uint id, uint value) {
+        dst.write(id << 3);
+        dst.write(value);
+    }
+
+    @static void write(SerialWriter dst, uint id, Message message) {
+        write(dst, id, _serializeToString(message));
+    }
+}
+
+class ProtoWriter {
+    SerialWriter __dst;
+
+    oper init(SerialWriter dst) : __dst = dst {}
+    oper init(Writer dst) : __dst(dst) {}
+
+    @final void write(uint id, String data) {
+        Field.write(__dst, id, data);
+    }
+
+    @final void write(uint id, uint value) {
+        Field.write(__dst, id, value);
+    }
+
+    @final void write(uint id, Message msg) {
+        Field.write(__dst, id, msg);
+    }
+
+    @final void write(Field field) {
+        field.write(__dst);
+    }
+}
+
+class ProtoReader {
+    SerialReader __src;
+
+    oper init(SerialReader src) : __src = src {}
+    oper init(Reader src) : __src(src) {}
+
+    Field readField() {
+        return Field.readFrom(__src);
+    }
+}
+
+void _deserialize(ProtoReader src, Message message) {
+    while (true) {
+        field := src.readField();
+        if (field is null)
+            return;
+        message.addField(field);
+    }
+}
+
+String _serializeToString(Message message) {
+    StringWriter backing = {};
+    ProtoWriter pw = {backing};
+    message.serialize(pw);
+    return backing.string();
+}
+
+Message _readMessage(String buffer, Message message) {
+    message.deserialize(ProtoReader(StringReader(buffer)));
+    return message;
+}
